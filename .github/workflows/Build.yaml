@@ -37,7 +37,7 @@ jobs:
           latest_version="${{ steps.n8n-version.outputs.n8n_version }}"
 
           # 檢查 Docker Hub 是否已有此版本的映像
-          if docker manifest inspect ${{ secrets.DOCKER_USERNAME }}/n8n:lts-trixie-slim-${latest_version#n8n@} > /dev/null 2>&1; then
+          if docker manifest inspect ${{ env.REGISTRY_IMAGE }}:lts-trixie-slim-${latest_version#n8n@} > /dev/null 2>&1; then
             echo "already_built=true" >> $GITHUB_OUTPUT
             echo "Version ${latest_version} already built"
           else
