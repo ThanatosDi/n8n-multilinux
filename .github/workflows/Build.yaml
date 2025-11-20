@@ -1,0 +1,103 @@
+name: Build Docker Image
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY_IMAGE: ${{ secrets.DOCKER_USERNAME }}/n8n-multilinux
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.n8n-version.outputs.n8n_version }}
+      already_built: ${{ steps.check-built.outputs.already_built }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: actions/checkout@v5
+      - name: Get n8n version
+        id: n8n-version
+        run: |
+          latest=$(curl -s https://api.github.com/repos/n8n-io/n8n/releases/latest | jq -r '.tag_name')
+          echo "n8n_version=${latest#n8n@}" >> $GITHUB_ENV
+          echo "n8n_version=${latest#n8n@}" >> $GITHUB_OUTPUT
+
+      - name: Check if version already built
+        id: check-built
+        run: |
+          # 檢查這個版本是否已經建置過
+          latest_version="${{ steps.n8n-version.outputs.n8n_version }}"
+
+          # 檢查 Docker Hub 是否已有此版本的映像
+          if docker manifest inspect ${{ secrets.DOCKER_USERNAME }}/n8n:lts-trixie-slim-${latest_version#n8n@} > /dev/null 2>&1; then
+            echo "already_built=true" >> $GITHUB_OUTPUT
+            echo "Version ${latest_version} already built"
+          else
+            echo "already_built=false" >> $GITHUB_OUTPUT
+            echo "Version ${latest_version} not built yet"
+          fi
+
+  build:
+    runs-on: ubuntu-latest
+    needs:
+      - check-release
+    if: needs.check-release.outputs.already_built == 'false'
+    strategy:
+      fail-fast: false
+      matrix:
+        os-release:
+          - lts-trixie
+          - lts-trixie-slim
+          - lts-bookworm
+          - lts-bookworm-slim
+          - lts-slim
+        platform:
+          - linux/amd64
+          - linux/arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=raw,value=${{ matrix.os-release }}-${{ needs.check-release.outputs.version }}
+            type=raw,value=${{ matrix.os-release }}-latest
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            NODE_TAG=${{ matrix.os-release }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
